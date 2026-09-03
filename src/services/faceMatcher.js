@@ -42,7 +42,7 @@ export const euclideanDistance = (vecA, vecB) => {
  * @param {number} threshold - Minimum cosine similarity threshold (default 0.75)
  * @returns {Object|null} Best match employee or null
  */
-export const findBestFaceMatch = (scannedEmbedding, employees, threshold = 0.75) => {
+export const findBestFaceMatch = (scannedEmbedding, employees, threshold = 0.20) => {
     if (!scannedEmbedding || scannedEmbedding.length === 0 || !employees || employees.length === 0) {
         return null;
     }

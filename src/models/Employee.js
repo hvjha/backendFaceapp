@@ -30,6 +30,24 @@ const employeeSchema = new mongoose.Schema(
             default: ""
         },
 
+        email: {
+            type: String,
+            trim: true,
+            lowercase: true,
+            default: ""
+        },
+
+        mobile: {
+            type: String,
+            trim: true,
+            default: ""
+        },
+
+        isMobileValid: {
+            type: Boolean,
+            default: true
+        },
+
         isPhoneAllowed: {
             type: Boolean,
             default: false

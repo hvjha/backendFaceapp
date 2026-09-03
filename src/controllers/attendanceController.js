@@ -19,33 +19,61 @@ export const scanFaceAndMarkAttendance = async (req, res) => {
         let matchedEmployee = null;
         let matchScore = 0;
 
-        // If specific employeeId is provided directly
+        const activeEmployees = await Employee.find({ isDeleted: false });
+
+        if (!activeEmployees || activeEmployees.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'No staff registered in system yet. Please register staff in Admin Control Center first.'
+            });
+        }
+
+        // 1. If specific employeeId is provided directly
         if (employeeId) {
             matchedEmployee = await Employee.findOne({ _id: employeeId, isDeleted: false });
             if (!matchedEmployee) {
                 return res.status(404).json({
                     success: false,
-                    message: 'Employee not found.'
+                    message: 'Employee record not found.'
                 });
             }
-        } else if (faceEmbedding && Array.isArray(faceEmbedding) && faceEmbedding.length > 0) {
-            // Match face vector against all active registered employees
-            const activeEmployees = await Employee.find({ isDeleted: false });
-            const bestMatch = findBestFaceMatch(faceEmbedding, activeEmployees, 0.70);
-
-            if (!bestMatch) {
+        } 
+        // 2. If faceEmbedding vector is provided
+        else if (faceEmbedding && Array.isArray(faceEmbedding) && faceEmbedding.length > 0) {
+            const bestMatch = findBestFaceMatch(faceEmbedding, activeEmployees, 0.20);
+            if (bestMatch && bestMatch.employee) {
+                matchedEmployee = bestMatch.employee;
+                matchScore = bestMatch.similarity;
+            } else {
+                // Check if faceImage matches any enrolled employee
+                const imageMatch = activeEmployees.find(e => e.faceImage && faceImage && e.faceImage === faceImage);
+                if (imageMatch) {
+                    matchedEmployee = imageMatch;
+                    matchScore = 0.98;
+                } else {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Face Not Recognized. No registered staff member matches this face. Please ensure you are registered in Admin Panel.'
+                    });
+                }
+            }
+        } 
+        // 3. If faceImage is provided
+        else if (faceImage) {
+            const imageMatch = activeEmployees.find(e => e.faceImage && e.faceImage === faceImage);
+            if (imageMatch) {
+                matchedEmployee = imageMatch;
+                matchScore = 0.98;
+            } else {
                 return res.status(400).json({
                     success: false,
-                    message: 'Face not recognized. Please make sure you are registered or try positioning your face clearly.'
+                    message: 'Face Not Recognized. No registered staff member matches this face scan.'
                 });
             }
-
-            matchedEmployee = bestMatch.employee;
-            matchScore = bestMatch.similarity;
         } else {
             return res.status(400).json({
                 success: false,
-                message: 'Either faceEmbedding or employeeId must be provided.'
+                message: 'Face scan image or embedding required.'
             });
         }
 
@@ -65,6 +93,7 @@ export const scanFaceAndMarkAttendance = async (req, res) => {
                 customEmployeeId: matchedEmployee.employeeId,
                 employeeName: matchedEmployee.name,
                 department: matchedEmployee.department || 'General',
+                isPhoneAllowed: matchedEmployee.isPhoneAllowed ?? false,
                 date: todayStr,
                 checkIn: now,
                 status: 'In Progress',
@@ -80,7 +109,8 @@ export const scanFaceAndMarkAttendance = async (req, res) => {
                     employeeId: matchedEmployee.employeeId,
                     name: matchedEmployee.name,
                     department: matchedEmployee.department,
-                    faceImage: matchedEmployee.faceImage
+                    faceImage: matchedEmployee.faceImage,
+                    isPhoneAllowed: matchedEmployee.isPhoneAllowed ?? false
                 },
                 matchSimilarity: matchScore ? (matchScore * 100).toFixed(1) + '%' : '100%',
                 data: newAttendance
@@ -102,7 +132,11 @@ export const scanFaceAndMarkAttendance = async (req, res) => {
                     message: `Cannot check-out yet. Please wait ${remainingSeconds} second(s). (Minimum 1 minute work duration required after check-in).`,
                     employee: {
                         _id: matchedEmployee._id,
-                        name: matchedEmployee.name
+                        employeeId: matchedEmployee.employeeId,
+                        name: matchedEmployee.name,
+                        department: matchedEmployee.department,
+                        faceImage: matchedEmployee.faceImage,
+                        isPhoneAllowed: matchedEmployee.isPhoneAllowed ?? false
                     },
                     checkInTime: activeSession.checkIn
                 });
@@ -127,7 +161,8 @@ export const scanFaceAndMarkAttendance = async (req, res) => {
                     employeeId: matchedEmployee.employeeId,
                     name: matchedEmployee.name,
                     department: matchedEmployee.department,
-                    faceImage: matchedEmployee.faceImage
+                    faceImage: matchedEmployee.faceImage,
+                    isPhoneAllowed: matchedEmployee.isPhoneAllowed ?? false
                 },
                 matchSimilarity: matchScore ? (matchScore * 100).toFixed(1) + '%' : '100%',
                 data: activeSession
@@ -306,3 +341,26 @@ export const exportAttendanceCSV = async (req, res) => {
         });
     }
 };
+
+/**
+ * Get Recent Attendance Log Entries for General Mode Table
+ */
+export const getRecentAttendance = async (req, res) => {
+    try {
+        const records = await Attendance.find({})
+            .sort({ checkIn: -1 })
+            .limit(20);
+
+        return res.status(200).json({
+            success: true,
+            count: records.length,
+            data: records
+        });
+    } catch (error) {
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+};
+

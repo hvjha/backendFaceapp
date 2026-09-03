@@ -20,6 +20,10 @@ const attendanceSchema = new mongoose.Schema(
             type: String,
             default: 'General'
         },
+        isPhoneAllowed: {
+            type: Boolean,
+            default: false
+        },
         date: {
             type: String, // YYYY-MM-DD
             required: true,

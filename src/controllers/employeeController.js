@@ -3,7 +3,7 @@ import Employee from "../models/Employee.js";
 // Create Employee
 export const createEmployee = async(req,res)=>{
     try{
-        const {employeeId,name,department,isPhoneAllowed,faceEmbedding,faceImage} = req.body;
+        const {employeeId,name,email,mobile,isMobileValid,department,isPhoneAllowed,faceEmbedding,faceImage} = req.body;
         const existingEmployee = await Employee.findOne({employeeId,isDeleted: false});
         if(existingEmployee){
             return res.status(400).json({
@@ -11,10 +11,20 @@ export const createEmployee = async(req,res)=>{
                 message:"Employee with this ID already exists"
             })
         }
+
+        // Phone validation logic check if mobile provided
+        const phoneRegex = /^[6-9]\d{9}$/;
+        const validMobileFlag = isMobileValid !== undefined 
+            ? isMobileValid 
+            : (mobile ? phoneRegex.test(mobile.trim()) : true);
+
         const employee = await Employee.create({
             employeeId,
             name,
-            department,
+            email: email || "",
+            mobile: mobile || "",
+            isMobileValid: validMobileFlag,
+            department: department || "General",
             isPhoneAllowed,
             faceEmbedding: faceEmbedding || [],
             faceImage: faceImage || ""
@@ -80,7 +90,7 @@ export const updateEmployee = async(req,res)=>{
     try{
         const {id} = req.params;
 
-        const {employeeId,name,department,isPhoneAllowed,faceEmbedding,faceImage} = req.body;
+        const {employeeId,name,email,mobile,isMobileValid,department,isPhoneAllowed,faceEmbedding,faceImage} = req.body;
 
         const employee = await Employee.findOne({_id: id, isDeleted: false});
         if(!employee){
@@ -101,9 +111,19 @@ export const updateEmployee = async(req,res)=>{
             }
         }
 
+        const phoneRegex = /^[6-9]\d{9}$/;
+
         // Update the employee
         if (employeeId !== undefined) employee.employeeId = employeeId;
         if (name !== undefined) employee.name = name;
+        if (email !== undefined) employee.email = email;
+        if (mobile !== undefined) {
+            employee.mobile = mobile;
+            if (isMobileValid === undefined) {
+                employee.isMobileValid = phoneRegex.test(mobile.trim());
+            }
+        }
+        if (isMobileValid !== undefined) employee.isMobileValid = isMobileValid;
         if (department !== undefined) employee.department = department;
         if (isPhoneAllowed !== undefined) employee.isPhoneAllowed = isPhoneAllowed;
         if (faceEmbedding !== undefined) employee.faceEmbedding = faceEmbedding;

@@ -3,7 +3,8 @@ import {
     scanFaceAndMarkAttendance,
     getEmployeeHistory,
     getAttendanceReport,
-    exportAttendanceCSV
+    exportAttendanceCSV,
+    getRecentAttendance
 } from '../controllers/attendanceController.js';
 
 const router = express.Router();
@@ -17,7 +18,11 @@ router.get('/employee/:id', getEmployeeHistory);
 // Date & Department Attendance Reports
 router.get('/report', getAttendanceReport);
 
+// Recent Attendance Logs for Kiosk Table
+router.get('/recent', getRecentAttendance);
+
 // Export Attendance Records to CSV
 router.get('/export', exportAttendanceCSV);
 
 export default router;
+
