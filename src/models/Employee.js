@@ -53,6 +53,21 @@ const employeeSchema = new mongoose.Schema(
             default: false
         },
 
+        shiftStartTime: {
+            type: String,
+            default: "09:00"
+        },
+
+        shiftEndTime: {
+            type: String,
+            default: "18:00"
+        },
+
+        targetDailyHours: {
+            type: Number,
+            default: 9
+        },
+
         isDeleted: {
             type: Boolean,
             default: false

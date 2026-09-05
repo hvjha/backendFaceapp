@@ -1,16 +1,53 @@
 import Attendance from '../models/Attendance.js';
 import Employee from '../models/Employee.js';
+import Holiday from '../models/Holiday.js';
 import { findBestFaceMatch } from '../services/faceMatcher.js';
 
 /**
- * Helper to format Date to YYYY-MM-DD string
+ * Helper to format Date to YYYY-MM-DD string using local time
  */
-const formatDate = (dateObj = new Date()) => {
-    return dateObj.toISOString().split('T')[0];
+export const formatDate = (dateObj = new Date()) => {
+    const year = dateObj.getFullYear();
+    const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+    const day = String(dateObj.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
 };
 
 /**
- * Face Scan Attendance Handler (Check-In & Check-Out with 1-min rule)
+ * Helper to calculate monthly working days (subtracting Sundays & Company Holidays)
+ */
+export const calculateMonthlyWorkingMetrics = async (year, month, targetDailyHours = 9) => {
+    const totalDaysInMonth = new Date(year, month, 0).getDate();
+    
+    let sundayCount = 0;
+    for (let d = 1; d <= totalDaysInMonth; d++) {
+        const cur = new Date(year, month - 1, d);
+        if (cur.getDay() === 0) { // Sunday
+            sundayCount++;
+        }
+    }
+
+    const monthStr = String(month).padStart(2, '0');
+    const prefix = `${year}-${monthStr}`;
+    const monthHolidays = await Holiday.find({ date: { $regex: `^${prefix}` } });
+    const holidayCount = monthHolidays.length;
+
+    const workingDays = Math.max(0, totalDaysInMonth - (sundayCount + holidayCount));
+    const targetHours = workingDays * targetDailyHours;
+
+    return {
+        year,
+        month,
+        totalDaysInMonth,
+        sundayCount,
+        holidayCount,
+        workingDays,
+        targetHours
+    };
+};
+
+/**
+ * Face Scan Attendance Handler (Check-In & Check-Out with 1-min rule & stale session handling)
  */
 export const scanFaceAndMarkAttendance = async (req, res) => {
     try {
@@ -18,6 +55,7 @@ export const scanFaceAndMarkAttendance = async (req, res) => {
 
         let matchedEmployee = null;
         let matchScore = 0;
+        let matchConfidence = 'High';
 
         const activeEmployees = await Employee.find({ isDeleted: false });
 
@@ -37,13 +75,15 @@ export const scanFaceAndMarkAttendance = async (req, res) => {
                     message: 'Employee record not found.'
                 });
             }
+            matchScore = 1.0;
         } 
         // 2. If faceEmbedding vector is provided
         else if (faceEmbedding && Array.isArray(faceEmbedding) && faceEmbedding.length > 0) {
-            const bestMatch = findBestFaceMatch(faceEmbedding, activeEmployees, 0.20);
+            const bestMatch = findBestFaceMatch(faceEmbedding, activeEmployees, 0.60);
             if (bestMatch && bestMatch.employee) {
                 matchedEmployee = bestMatch.employee;
                 matchScore = bestMatch.similarity;
+                matchConfidence = bestMatch.confidence || 'Medium';
             } else {
                 // Check if faceImage matches any enrolled employee
                 const imageMatch = activeEmployees.find(e => e.faceImage && faceImage && e.faceImage === faceImage);
@@ -53,7 +93,7 @@ export const scanFaceAndMarkAttendance = async (req, res) => {
                 } else {
                     return res.status(400).json({
                         success: false,
-                        message: 'Face Not Recognized. No registered staff member matches this face. Please ensure you are registered in Admin Panel.'
+                        message: 'Face Not Recognized. Face similarity match is below 60% threshold. Please position face clearly in front of camera.'
                     });
                 }
             }
@@ -80,11 +120,22 @@ export const scanFaceAndMarkAttendance = async (req, res) => {
         const now = new Date();
         const todayStr = formatDate(now);
 
-        // Check if there is an active session (checkIn exists, checkOut is null)
-        const activeSession = await Attendance.findOne({
+        // Check for open active session (checkIn exists, checkOut is null)
+        let activeSession = await Attendance.findOne({
             employeeId: matchedEmployee._id,
             checkOut: null
         }).sort({ checkIn: -1 });
+
+        // Auto-close stale active session if it originated from a previous date
+        if (activeSession && activeSession.date !== todayStr) {
+            const checkInDate = new Date(activeSession.checkIn);
+            activeSession.checkOut = new Date(checkInDate.getTime() + 8 * 60 * 60 * 1000);
+            activeSession.durationMinutes = 480; // Default 8 hrs for forgotten checkout
+            activeSession.status = 'Partial';
+            await activeSession.save();
+
+            activeSession = null; // Reset so employee can Check-In for today
+        }
 
         if (!activeSession) {
             // === CHECK-IN (LOGIN) ===
@@ -110,9 +161,12 @@ export const scanFaceAndMarkAttendance = async (req, res) => {
                     name: matchedEmployee.name,
                     department: matchedEmployee.department,
                     faceImage: matchedEmployee.faceImage,
-                    isPhoneAllowed: matchedEmployee.isPhoneAllowed ?? false
+                    isPhoneAllowed: matchedEmployee.isPhoneAllowed ?? false,
+                    shiftStartTime: matchedEmployee.shiftStartTime || "09:00",
+                    shiftEndTime: matchedEmployee.shiftEndTime || "18:00"
                 },
                 matchSimilarity: matchScore ? (matchScore * 100).toFixed(1) + '%' : '100%',
+                confidence: matchConfidence,
                 data: newAttendance
             });
         } else {
@@ -165,6 +219,7 @@ export const scanFaceAndMarkAttendance = async (req, res) => {
                     isPhoneAllowed: matchedEmployee.isPhoneAllowed ?? false
                 },
                 matchSimilarity: matchScore ? (matchScore * 100).toFixed(1) + '%' : '100%',
+                confidence: matchConfidence,
                 data: activeSession
             });
         }
@@ -195,10 +250,22 @@ export const getEmployeeHistory = async (req, res) => {
 
         const totalRecords = records.length;
         const totalMinutes = records.reduce((acc, curr) => acc + (curr.durationMinutes || 0), 0);
-        const totalHours = (totalMinutes / 60).toFixed(1);
+        const totalHoursNum = Math.round((totalMinutes / 60) * 10) / 10;
         
         // Count unique dates attended
         const uniqueDays = new Set(records.map(r => r.date)).size;
+
+        const now = new Date();
+        const metrics = await calculateMonthlyWorkingMetrics(now.getFullYear(), now.getMonth() + 1, employee.targetDailyHours || 9);
+
+        const hoursDifference = Math.round((totalHoursNum - metrics.targetHours) * 10) / 10;
+
+        let attendanceStatus = 'GREEN';
+        if (hoursDifference > 0) {
+            attendanceStatus = 'EXTRA';
+        } else if (metrics.targetHours - totalHoursNum > 3) {
+            attendanceStatus = 'RED';
+        }
 
         return res.status(200).json({
             success: true,
@@ -207,7 +274,13 @@ export const getEmployeeHistory = async (req, res) => {
                 stats: {
                     totalPresentDays: uniqueDays,
                     totalLogs: totalRecords,
-                    totalHoursWorked: totalHours,
+                    totalHoursWorked: totalHoursNum.toFixed(1),
+                    targetWorkingDays: metrics.workingDays,
+                    targetHours: metrics.targetHours,
+                    hoursDifference,
+                    attendanceStatus,
+                    sundaysCount: metrics.sundayCount,
+                    holidaysCount: metrics.holidayCount,
                     averageMinutesPerDay: uniqueDays > 0 ? Math.round(totalMinutes / uniqueDays) : 0
                 },
                 history: records
@@ -280,9 +353,11 @@ export const exportAttendanceCSV = async (req, res) => {
 
         let query = {};
         const today = new Date();
+        let targetEmployee = null;
 
         if (employeeId) {
             query.employeeId = employeeId;
+            targetEmployee = await Employee.findOne({ _id: employeeId });
         }
 
         if (filterType === 'particularDate' && date) {
@@ -301,10 +376,36 @@ export const exportAttendanceCSV = async (req, res) => {
         }
 
         const records = await Attendance.find(query).sort({ date: -1, checkIn: -1 });
+        const metrics = await calculateMonthlyWorkingMetrics(today.getFullYear(), today.getMonth() + 1, targetEmployee?.targetDailyHours || 9);
 
-        // Build CSV Content
+        const totalMinutes = records.reduce((acc, r) => acc + (r.durationMinutes || 0), 0);
+        const actualHours = Math.round((totalMinutes / 60) * 10) / 10;
+        const hoursDiff = Math.round((actualHours - metrics.targetHours) * 10) / 10;
+
+        let statusLabel = 'TARGET MET (GREEN)';
+        if (hoursDiff > 0) {
+            statusLabel = `EXTRA HOURS (+${hoursDiff} hrs)`;
+        } else if (metrics.targetHours - actualHours > 3) {
+            statusLabel = `SHORTFALL WARNING (-${Math.abs(hoursDiff)} hrs)`;
+        }
+
+        // Build CSV Header Block
+        const csvRows = [];
+        if (targetEmployee) {
+            csvRows.push(`"Employee Name: ${targetEmployee.name}"`);
+            csvRows.push(`"Employee ID: ${targetEmployee.employeeId}"`);
+            csvRows.push(`"Department: ${targetEmployee.department || 'General'}"`);
+            csvRows.push(`"Shift Timings: ${targetEmployee.shiftStartTime || '09:00'} - ${targetEmployee.shiftEndTime || '18:00'} (${targetEmployee.targetDailyHours || 9} hrs/day)"`);
+            csvRows.push(`"Report Month: ${today.toLocaleString('default', { month: 'long', year: 'numeric' })}"`);
+            csvRows.push(`"Active Working Days: ${metrics.workingDays} days (Total Days: ${metrics.totalDaysInMonth}, Sundays: ${metrics.sundayCount}, Holidays: ${metrics.holidayCount})"`);
+            csvRows.push(`"Target Expected Hours: ${metrics.targetHours} hrs"`);
+            csvRows.push(`"Actual Total Hours Worked: ${actualHours} hrs"`);
+            csvRows.push(`"Attendance Status: ${statusLabel}"`);
+            csvRows.push('');
+        }
+
         const headers = ['Employee ID', 'Employee Name', 'Department', 'Date', 'Check-In Time', 'Check-Out Time', 'Duration (Mins)', 'Status'];
-        const csvRows = [headers.join(',')];
+        csvRows.push(headers.join(','));
 
         records.forEach(rec => {
             const checkInFormatted = rec.checkIn ? new Date(rec.checkIn).toLocaleTimeString() : '';

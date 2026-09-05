@@ -3,7 +3,7 @@ import Employee from "../models/Employee.js";
 // Create Employee
 export const createEmployee = async(req,res)=>{
     try{
-        const {employeeId,name,email,mobile,isMobileValid,department,isPhoneAllowed,faceEmbedding,faceImage} = req.body;
+        const {employeeId,name,email,mobile,isMobileValid,department,isPhoneAllowed,shiftStartTime,shiftEndTime,targetDailyHours,faceEmbedding,faceImage} = req.body;
         const existingEmployee = await Employee.findOne({employeeId,isDeleted: false});
         if(existingEmployee){
             return res.status(400).json({
@@ -25,7 +25,10 @@ export const createEmployee = async(req,res)=>{
             mobile: mobile || "",
             isMobileValid: validMobileFlag,
             department: department || "General",
-            isPhoneAllowed,
+            isPhoneAllowed: !!isPhoneAllowed,
+            shiftStartTime: shiftStartTime || "09:00",
+            shiftEndTime: shiftEndTime || "18:00",
+            targetDailyHours: targetDailyHours ? Number(targetDailyHours) : 9,
             faceEmbedding: faceEmbedding || [],
             faceImage: faceImage || ""
         });
@@ -90,7 +93,7 @@ export const updateEmployee = async(req,res)=>{
     try{
         const {id} = req.params;
 
-        const {employeeId,name,email,mobile,isMobileValid,department,isPhoneAllowed,faceEmbedding,faceImage} = req.body;
+        const {employeeId,name,email,mobile,isMobileValid,department,isPhoneAllowed,shiftStartTime,shiftEndTime,targetDailyHours,faceEmbedding,faceImage} = req.body;
 
         const employee = await Employee.findOne({_id: id, isDeleted: false});
         if(!employee){
@@ -126,6 +129,9 @@ export const updateEmployee = async(req,res)=>{
         if (isMobileValid !== undefined) employee.isMobileValid = isMobileValid;
         if (department !== undefined) employee.department = department;
         if (isPhoneAllowed !== undefined) employee.isPhoneAllowed = isPhoneAllowed;
+        if (shiftStartTime !== undefined) employee.shiftStartTime = shiftStartTime;
+        if (shiftEndTime !== undefined) employee.shiftEndTime = shiftEndTime;
+        if (targetDailyHours !== undefined) employee.targetDailyHours = Number(targetDailyHours);
         if (faceEmbedding !== undefined) employee.faceEmbedding = faceEmbedding;
         if (faceImage !== undefined) employee.faceImage = faceImage;
 
